@@ -143,8 +143,10 @@ export const SavingsTracker: Plugin = async ({ client, $ }) => {
           const days = hours / 24
 
           const baselineName = `${cfg.baseline.provider}/${cfg.baseline.model}`
-          const totalTokens = usageData.totalPromptTokens + usageData.totalCompletionTokens
           const savings = usageData.baselineCost - usageData.localCost
+          const savingsPerMTok = savings / ((usageData.totalPromptTokens + usageData.totalCompletionTokens) / 1_000_000)
+          const localPerMTok = usageData.localCost / ((usageData.totalPromptTokens + usageData.totalCompletionTokens) / 1_000_000) || 0
+          const baselinePerMTok = cfg.baseline.inputCostPer1M + cfg.baseline.outputCostPer1M
 
           return `Savings Tracker Summary
 ========================
@@ -152,16 +154,16 @@ Period: ${days.toFixed(1)} days (since ${usageData.startDate.split("T")[0]})
 
 Usage:
   Total requests: ${usageData.totalRequests.toLocaleString()}
-  Total tokens: ${totalTokens.toLocaleString()}
+  Total tokens: ${(usageData.totalPromptTokens + usageData.totalCompletionTokens).toLocaleString()}
     - Prompt: ${usageData.totalPromptTokens.toLocaleString()}
     - Completion: ${usageData.totalCompletionTokens.toLocaleString()}
 
 Costs:
-  Baseline (${baselineName} @ $${cfg.baseline.inputCostPer1M}/$ ${cfg.baseline.outputCostPer1M}): $${usageData.baselineCost.toFixed(4)}
-  Local inference: $${usageData.localCost.toFixed(6)}
-  -------------------
-  Net savings: $${savings.toFixed(4)}
-  (That's $${(savings / (hours || 1)).toFixed(4)}/hr)`
+  ${baselineName} API: $${usageData.baselineCost.toFixed(4)} ($${baselinePerMTok.toFixed(2)}/M tok)
+  Local inference: $${usageData.localCost.toFixed(4)} ($${localPerMTok.toFixed(2)}/M tok)
+  -------------------------
+  Net savings: $${savings.toFixed(4)} ($${savingsPerMTok.toFixed(2)}/M tok)
+  Rate: ${((savings / (usageData.baselineCost || 1)) * 100).toFixed(0)}% cheaper at home`
         },
       },
 
