@@ -1,5 +1,5 @@
 import type { Plugin } from "@opencode-ai/plugin"
-import { resolve, join } from "path"
+import { join } from "path"
 
 interface GPUConfig {
   wattage: number
@@ -36,20 +36,29 @@ interface SavingsData {
   }>
 }
 
+const DATA_DIR = join(process.env.HOME || "", ".local", "share", "opencode-savings")
+
 const DEFAULT_CONFIG: SavingsConfig = {
-  providers: ["llama-*"],
+  providers: ["llama-*", "minimax-*"],
   baseline: {
-    provider: "openai",
-    model: "gpt-4o",
-    inputCostPer1M: 15,
-    outputCostPer1M: 60,
+    provider: "minimax",
+    model: "nvfp4",
+    inputCostPer1M: 0.30,
+    outputCostPer1M: 1.20,
   },
-  gpus: [],
+  gpus: [
+    {
+      wattage: 275,
+      promptTokensPerSecond: 1000,
+      outputTokensPerSecond: 43,
+      costPerKwh: 0.12,
+    },
+  ],
 }
 
-export const SavingsTracker: Plugin = async ({ client, $ }) => {
-  const configDir = process.env.XDG_CONFIG_HOME || join(process.env.HOME!, ".config", "opencode")
-  const dataFile = join(configDir, "savings-tracker", "usage.json")
+export const SavingsTracker: Plugin = async ({ $ }) => {
+  const configFile = join(DATA_DIR, "config.json")
+  const dataFile = join(DATA_DIR, "usage.json")
 
   let usageData: SavingsData = {
     startDate: new Date().toISOString(),
@@ -65,27 +74,22 @@ export const SavingsTracker: Plugin = async ({ client, $ }) => {
   let config = DEFAULT_CONFIG
 
   async function loadConfig(): Promise<SavingsConfig> {
-    if (config.gpus.length) return config
-
     try {
-      const cfg = await client.config.get()
-      const savings = (cfg.data as any)?.savings
-      if (savings) {
-        config = {
-          providers: savings.providers || DEFAULT_CONFIG.providers,
-          baseline: savings.baseline || DEFAULT_CONFIG.baseline,
-          gpus: (savings.gpus || []).map((g: any) => ({
-            wattage: g.wattage || 275,
-            promptTokensPerSecond: g.promptTokensPerSecond || g.tokensPerSecond || 1000,
-            outputTokensPerSecond: g.outputTokensPerSecond || g.tokensPerSecond || 43,
-            costPerKwh: g.costPerKwh || 0.12,
-          })),
-        }
+      const content = await Bun.file(configFile).text()
+      const userConfig = JSON.parse(content)
+      config = {
+        providers: userConfig.providers || DEFAULT_CONFIG.providers,
+        baseline: userConfig.baseline || DEFAULT_CONFIG.baseline,
+        gpus: (userConfig.gpus || DEFAULT_CONFIG.gpus).map((g: any) => ({
+          wattage: g.wattage || 275,
+          promptTokensPerSecond: g.promptTokensPerSecond || 1000,
+          outputTokensPerSecond: g.outputTokensPerSecond || 43,
+          costPerKwh: g.costPerKwh || 0.12,
+        })),
       }
     } catch {
-      // Use defaults
+      config = DEFAULT_CONFIG
     }
-
     return config
   }
 
@@ -94,14 +98,21 @@ export const SavingsTracker: Plugin = async ({ client, $ }) => {
       const content = await Bun.file(dataFile).text()
       usageData = JSON.parse(content)
     } catch {
-      // File doesn't exist yet, use defaults
+      usageData = {
+        startDate: new Date().toISOString(),
+        lastUpdated: new Date().toISOString(),
+        totalPromptTokens: 0,
+        totalCompletionTokens: 0,
+        totalRequests: 0,
+        baselineCost: 0,
+        localCost: 0,
+        byModel: {},
+      }
     }
   }
 
   async function saveData() {
     usageData.lastUpdated = new Date().toISOString()
-    const dir = join(configDir, "savings-tracker")
-    await $`mkdir -p ${dir}`
     await Bun.write(dataFile, JSON.stringify(usageData, null, 2))
   }
 
@@ -135,7 +146,7 @@ export const SavingsTracker: Plugin = async ({ client, $ }) => {
       savings: {
         description: "Show savings tracker summary",
         args: {},
-        async execute(_args, _context) {
+        async execute() {
           await loadData()
           const cfg = await loadConfig()
           const elapsed = Date.now() - new Date(usageData.startDate).getTime()
@@ -144,8 +155,9 @@ export const SavingsTracker: Plugin = async ({ client, $ }) => {
 
           const baselineName = `${cfg.baseline.provider}/${cfg.baseline.model}`
           const savings = usageData.baselineCost - usageData.localCost
-          const savingsPerMTok = savings / ((usageData.totalPromptTokens + usageData.totalCompletionTokens) / 1_000_000)
-          const localPerMTok = usageData.localCost / ((usageData.totalPromptTokens + usageData.totalCompletionTokens) / 1_000_000) || 0
+          const totalTokens = usageData.totalPromptTokens + usageData.totalCompletionTokens
+          const savingsPerMTok = savings / (totalTokens / 1_000_000) || 0
+          const localPerMTok = usageData.localCost / (totalTokens / 1_000_000) || 0
           const baselinePerMTok = cfg.baseline.inputCostPer1M + cfg.baseline.outputCostPer1M
 
           return `Savings Tracker Summary
@@ -154,7 +166,7 @@ Period: ${days.toFixed(1)} days (since ${usageData.startDate.split("T")[0]})
 
 Usage:
   Total requests: ${usageData.totalRequests.toLocaleString()}
-  Total tokens: ${(usageData.totalPromptTokens + usageData.totalCompletionTokens).toLocaleString()}
+  Total tokens: ${totalTokens.toLocaleString()}
     - Prompt: ${usageData.totalPromptTokens.toLocaleString()}
     - Completion: ${usageData.totalCompletionTokens.toLocaleString()}
 
@@ -172,7 +184,7 @@ Costs:
         args: {
           confirm: { type: "boolean", description: "Set to true to confirm reset", default: false },
         },
-        async execute(args, _context) {
+        async execute(args) {
           if (!args.confirm) {
             return "Pass confirm: true to reset tracking data"
           }
@@ -192,10 +204,6 @@ Costs:
           return "Savings data reset. Start fresh!"
         },
       },
-    },
-
-    async "session.created"() {
-      await loadData()
     },
 
     async "message.updated"({ message }) {
