@@ -125,66 +125,6 @@ export const SavingsTracker: Plugin = async ({ client }) => {
   })
 
   return {
-    tool: {
-      savings: tool({
-        description: "Show savings tracker summary",
-        args: {},
-        async execute() {
-          loadData()
-          const cfg = loadConfig()
-          const elapsed = Date.now() - new Date(usageData.startDate).getTime()
-          const days = elapsed / (1000 * 60 * 60 * 24)
-          const baselineName = `${cfg.baseline.provider}/${cfg.baseline.model}`
-          const savings = usageData.baselineCost - usageData.localCost
-          const totalTokens = usageData.totalPromptTokens + usageData.totalCompletionTokens
-          const savingsPerMTok = savings / (totalTokens / 1_000_000) || 0
-          const localPerMTok = usageData.localCost / (totalTokens / 1_000_000) || 0
-          const baselinePerMTok = cfg.baseline.inputCostPer1M + cfg.baseline.outputCostPer1M
-
-          return `Savings Tracker Summary
-=======================
-Period: ${days.toFixed(1)} days (since ${usageData.startDate.split("T")[0]})
-
-Usage:
-  Total requests: ${usageData.totalRequests.toLocaleString()}
-  Total tokens: ${totalTokens.toLocaleString()}
-    - Prompt: ${usageData.totalPromptTokens.toLocaleString()}
-    - Completion: ${usageData.totalCompletionTokens.toLocaleString()}
-
-Costs:
-  ${baselineName} API: $${usageData.baselineCost.toFixed(4)} ($${baselinePerMTok.toFixed(2)}/M tok)
-  Local inference: $${usageData.localCost.toFixed(4)} ($${localPerMTok.toFixed(2)}/M tok)
-  -------------------------
-  Net savings: $${savings.toFixed(4)} ($${savingsPerMTok.toFixed(2)}/M tok)
-  Rate: ${((savings / (usageData.baselineCost || 1)) * 100).toFixed(0)}% cheaper at home`
-        },
-      }),
-
-      "savings-reset": tool({
-        description: "Reset savings tracker data",
-        args: {
-          confirm: tool.schema.boolean().default(false),
-        },
-        async execute(args) {
-          if (!args.confirm) {
-            return "Pass confirm: true to reset tracking data"
-          }
-          usageData = {
-            startDate: new Date().toISOString(),
-            lastUpdated: new Date().toISOString(),
-            totalPromptTokens: 0,
-            totalCompletionTokens: 0,
-            totalRequests: 0,
-            baselineCost: 0,
-            localCost: 0,
-            byModel: {},
-          }
-          saveData()
-          return "Savings data reset. Start fresh!"
-        },
-      }),
-    },
-
     event: async ({ event }) => {
       if (event.type !== "message.updated") return
       const msg = (event as any).properties?.info

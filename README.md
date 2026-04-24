@@ -1,58 +1,65 @@
 # OpenCode Savings Tracker
 
-Track your local inference savings vs API costs.
+Track your local inference savings vs API costs in real-time.
 
-## Configuration
+## Installation
 
-Add to your `opencode.json`:
+1. **Plugin** (tracks token usage):
+   ```json
+   {
+     "plugin": ["/home/you/.config/opencode/plugins/savings-tracker.ts"]
+   }
+   ```
 
-```json
-{
-  "plugins": ["opencode-savings-tracker"],
-  "savings": {
-    "providers": ["llama-*", "minimax-*"],
-    "baseline": {
-      "provider": "minimax",
-      "model": "nvfp4",
-      "inputCostPer1M": 0.30,
-      "outputCostPer1M": 1.20
-    },
-    "gpus": [
-      {
-        "wattage": 275,
-        "promptTokensPerSecond": 1000,
-        "outputTokensPerSecond": 43,
-        "costPerKwh": 0.12
-      }
-    ]
-  }
-}
-```
+2. **Custom tools** (for commands):
+   - Copy `tools/savings.ts` to `~/.config/opencode/tools/savings.ts`
+   - Copy `tools/savings-reset.ts` to `~/.config/opencode/tools/savings-reset.ts`
 
-### Config Options
+3. **Config** (optional - uses defaults if missing):
+   ```json
+   {
+     "providers": ["llama-*", "minimax-*"],
+     "baseline": {
+       "provider": "minimax",
+       "model": "nvfp4",
+       "inputCostPer1M": 0.30,
+       "outputCostPer1M": 1.20
+     },
+     "gpus": [
+       {
+         "wattage": 275,
+         "promptTokensPerSecond": 1000,
+         "outputTokensPerSecond": 43,
+         "costPerKwh": 0.12
+       }
+     ]
+   }
+   ```
+   Save to `~/.local/share/opencode-savings/config.json`
 
-| Field | Description |
-|-------|-------------|
-| `providers` | Provider patterns to track (globs like `llama-*` work) |
-| `baseline.provider` | API provider name for comparison |
-| `baseline.model` | API model name |
-| `baseline.inputCostPer1M` | Input cost per 1M tokens |
-| `baseline.outputCostPer1M` | Output cost per 1M tokens |
-| `gpus[].wattage` | GPU wattage (use average during inference) |
-| `gpus[].promptTokensPerSecond` | Prompt processing speed |
-| `gpus[].outputTokensPerSecond` | Generation speed |
-| `gpus[].costPerKwh` | Electricity rate (default: $0.12) |
+## Config Options
+
+| Field | Description | Default |
+|-------|------------|--------|
+| `providers` | Provider patterns to track (globs like `llama-*`) | `["llama-*", "minimax-*"]` |
+| `baseline.provider` | API provider for comparison | `minimax` |
+| `baseline.model` | API model name | `nvfp4` |
+| `baseline.inputCostPer1M` | Input cost per 1M tokens | `$0.30` |
+| `baseline.outputCostPer1M` | Output cost per 1M tokens | `$1.20` |
+| `gpus[].wattage` | GPU wattage (average during inference) | `275W` |
+| `gpus[].promptTokensPerSecond` | Prompt processing speed | `1000 tok/s` |
+| `gpus[].outputTokensPerSecond` | Generation speed | `43 tok/s` |
+| `gpus[].costPerKwh` | Electricity rate | `$0.12` |
 
 ## Usage
 
-Commands:
 - `/savings` - Show savings summary
-- `/savings-reset` - Reset tracking data (pass `confirm: true`)
+- `/savings-reset confirm=true` - Reset tracking data
 
 ## How It Works
 
-The plugin tracks token usage from local providers (matching your provider patterns) and calculates:
-- **Baseline cost**: What you'd pay on the API model (input + output tokens × rate)
+The plugin hooks into `event:message.updated` to track token usage from local inference, then calculates:
+- **Baseline cost**: What you'd pay on the API (input + output tokens × rate)
 - **Local cost**: Electricity used (watts × time × $/kWh)
 - **Savings**: Baseline - Local
 
@@ -60,7 +67,7 @@ The plugin tracks token usage from local providers (matching your provider patte
 
 ```
 Savings Tracker Summary
-========================
+=======================
 Period: 7.3 days (since 2024-01-15)
 
 Usage:
@@ -70,9 +77,9 @@ Usage:
     - Completion: 1,555,445
 
 Costs:
-  Baseline (minimax/nvfp4 @ $0.30/ $1.20): $234.56
+  minimax/nvfp4 API: $234.56
   Local inference: $0.01
-  -------------------
+  -------------------------
   Net savings: $234.55
-  (That's $32.14/hr)
+  Rate: 99% cheaper at home
 ```
