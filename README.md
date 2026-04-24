@@ -39,7 +39,8 @@ Create `~/.local/share/opencode-savings/config.json` to customize defaults:
     "provider": "minimax",
     "model": "nvfp4",
     "inputCostPer1M": 0.30,
-    "outputCostPer1M": 1.20
+    "outputCostPer1M": 1.20,
+    "cacheReadCostPer1M": 0.06
   },
   "gpus": [
     {
@@ -81,12 +82,22 @@ Period: 7.3 days (since 2024-01-15)
 Usage:
   Total requests: 1,234
   Total tokens: 5,678,901
-    - Prompt: 4,123,456
+    - Fresh input: 4,123,456
+    - Cache read: 555,445
     - Completion: 1,555,445
 
 Costs:
   minimax/nvfp4 API: $234.56
+    - Cache read: $0.03
+    - Fresh input: $123.70
+    - Output: $186.65
   Local inference: $0.01
   -------------------------
   Net savings: $234.55 (99% cheaper at home)
 ```
+
+## Future Enhancements
+
+See [GitHub Issues](https://github.com/WynnD/opencode-savings-tracker/issues) for planned features:
+- Track savings over time with charts
+- Show cache hit rate percentage
