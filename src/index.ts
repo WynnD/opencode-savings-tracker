@@ -12,6 +12,7 @@ const DEFAULT_CONFIG = {
     model: "nvfp4",
     inputCostPer1M: 0.30,
     outputCostPer1M: 1.20,
+    cacheReadCostPer1M: 0.06,
   },
   gpus: [
     {
@@ -66,6 +67,13 @@ function calculateLocalCost(promptTokens, completionTokens, cfg) {
   return (watthours * costPerKwh) / 1000
 }
 
+function calculateBaselineCost(promptTokens, completionTokens, cacheReadTokens, cfg) {
+  const cacheReadCost = (cacheReadTokens * (cfg.baseline.cacheReadCostPer1M || 0.06)) / 1_000_000
+  const freshInputCost = ((promptTokens - cacheReadTokens) * cfg.baseline.inputCostPer1M) / 1_000_000
+  const outputCost = (completionTokens * cfg.baseline.outputCostPer1M) / 1_000_000
+  return cacheReadCost + freshInputCost + outputCost
+}
+
 export const SavingsTracker: Plugin = async ({ client }) => {
   const configFile = join(DATA_DIR, "config.json")
   const dataFile = join(DATA_DIR, "usage.json")
@@ -75,6 +83,7 @@ export const SavingsTracker: Plugin = async ({ client }) => {
     lastUpdated: new Date().toISOString(),
     totalPromptTokens: 0,
     totalCompletionTokens: 0,
+    totalCacheReadTokens: 0,
     totalRequests: 0,
     baselineCost: 0,
     localCost: 0,
@@ -106,6 +115,7 @@ export const SavingsTracker: Plugin = async ({ client }) => {
       lastUpdated: new Date().toISOString(),
       totalPromptTokens: 0,
       totalCompletionTokens: 0,
+      totalCacheReadTokens: 0,
       totalRequests: 0,
       baselineCost: 0,
       localCost: 0,
@@ -130,7 +140,15 @@ export const SavingsTracker: Plugin = async ({ client }) => {
       const msg = (event as any).properties?.info
       if (!msg || msg.role !== "assistant") return
       
-      const assistantMsg = msg as { providerID?: string; modelID?: string; tokens?: { input: number; output: number } }
+      const assistantMsg = msg as { 
+        providerID?: string
+        modelID?: string
+        tokens?: { 
+          input: number
+          output: number
+          cache?: { read?: number; write?: number }
+        }
+      }
       if (!assistantMsg?.tokens) return
 
       const modelId = `${assistantMsg.providerID || ""}/${assistantMsg.modelID || ""}`
@@ -140,25 +158,26 @@ export const SavingsTracker: Plugin = async ({ client }) => {
 
       const promptTokens = assistantMsg.tokens.input || 0
       const completionTokens = assistantMsg.tokens.output || 0
+      const cacheReadTokens = assistantMsg.tokens.cache?.read || 0
 
       if (!promptTokens && !completionTokens) return
 
-      const baselineCost = (promptTokens * cfg.baseline.inputCostPer1M / 1_000_000) +
-                        (completionTokens * cfg.baseline.outputCostPer1M / 1_000_000)
-
+      const baselineCost = calculateBaselineCost(promptTokens, completionTokens, cacheReadTokens, cfg)
       const localCost = calculateLocalCost(promptTokens, completionTokens, cfg)
 
       usageData.totalPromptTokens += promptTokens
       usageData.totalCompletionTokens += completionTokens
+      usageData.totalCacheReadTokens += cacheReadTokens
       usageData.totalRequests += 1
       usageData.baselineCost += baselineCost
       usageData.localCost += localCost
 
       if (!usageData.byModel[modelId]) {
-        usageData.byModel[modelId] = { promptTokens: 0, completionTokens: 0, requests: 0 }
+        usageData.byModel[modelId] = { promptTokens: 0, completionTokens: 0, cacheReadTokens: 0, requests: 0 }
       }
       usageData.byModel[modelId].promptTokens += promptTokens
       usageData.byModel[modelId].completionTokens += completionTokens
+      usageData.byModel[modelId].cacheReadTokens += cacheReadTokens
       usageData.byModel[modelId].requests += 1
 
       saveData()
