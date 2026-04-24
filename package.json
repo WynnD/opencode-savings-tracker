@@ -1,0 +1,13 @@
+{
+  "name": "opencode-savings-tracker",
+  "version": "1.0.0",
+  "description": "Track local inference savings vs API costs",
+  "type": "module",
+  "exports": {
+    "./plugin": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {}
+}
