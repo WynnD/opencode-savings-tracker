@@ -148,6 +148,9 @@ export const SavingsTracker: Plugin = async ({ client }) => {
           output: number
           cache?: { read?: number; write?: number }
         }
+        usage?: {
+          prompt_tokens_details?: { cached_tokens?: number }
+        }
       }
       if (!assistantMsg?.tokens) return
 
@@ -158,7 +161,7 @@ export const SavingsTracker: Plugin = async ({ client }) => {
 
       const promptTokens = assistantMsg.tokens.input || 0
       const completionTokens = assistantMsg.tokens.output || 0
-      const cacheReadTokens = assistantMsg.tokens.cache?.read || 0
+      const cacheReadTokens = assistantMsg.usage?.prompt_tokens_details?.cached_tokens || assistantMsg.tokens.cache?.read || 0
 
       if (!promptTokens && !completionTokens) return
 
