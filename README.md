@@ -1,36 +1,89 @@
 # OpenCode Savings Tracker
 
-Track your local inference savings vs API costs in real-time.
+Track your local inference savings vs API costs in real-time. See how much you're saving by running models locally instead of paying API rates.
+
+**97% cheaper at home!** Local inference costs ~$0.01 vs $0.30/M tokens on the API.
+
+## Features
+
+- **Automatic tracking** - Plugin tracks every request silently
+- **Cache-aware** - Tracks prefix caching (fresh vs cached tokens)
+- **Simple commands** - `/savings` to see your savings
+- **Easy install** - Copy files, restart, done
 
 ## Installation
 
-### 1. Plugin (automatic token tracking)
-
-Copy the plugin to your opencode plugins directory:
+### 1. Install the plugin
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
-cp opencode-savings-tracker/src/index.ts ~/.config/opencode/plugins/savings-tracker.ts
+cp src/index.ts ~/.config/opencode/plugins/savings-tracker.ts
 ```
 
-This tracks token usage automatically when you use local inference.
-
-### 2. Commands (manual access)
-
-Copy the command files to your commands directory:
+### 2. Install the commands
 
 ```bash
 mkdir -p ~/.config/opencode/commands
-cp opencode-savings-tracker/.opencode/commands/*.md ~/.config/opencode/commands/
+cp .opencode/commands/*.md ~/.config/opencode/commands/
 ```
 
-Then use:
-- `/savings` - Show savings summary
-- `/savings-reset confirm: true` - Reset tracking data
+### 3. Restart opencode
 
-### 3. Config (optional)
+```bash
+# Exit and reopen opencode, or restart the daemon
+```
 
-Create `~/.local/share/opencode-savings/config.json` to customize defaults:
+### 4. Test it
+
+```bash
+opencode run "hello"          # Generate some tokens
+opencode run "/savings"      # See your savings!
+```
+
+## Commands
+
+| Command | Description |
+|---------|------------|
+| `/savings` | Show savings summary |
+| `/savings-reset confirm: true` | Reset all tracking data |
+
+## What It Tracks
+
+| Token Type | Rate | Notes |
+|----------|------|-------|
+| Fresh input | $0.30/M | New tokens processed |
+| Cache read | $0.06/M | From prefix caching |
+| Output | $1.20/M | Generated tokens |
+
+**Your local cost**: Just electricity (~$0.0001/M tokens at $0.12/kWh)
+
+## Example Output
+
+```
+Savings Tracker Summary
+======================
+Period: 0.5 days (since 2024-04-24)
+
+Usage:
+  Total requests: 25
+  Total input tokens: 3,456,789
+    - Fresh: 2,123,456
+    - Cache read: 1,333,333
+  Total output tokens: 45,678
+
+Costs:
+  minimax/nvfp4 API: $12.34
+    - Cache read: $0.08
+    - Fresh input: $0.64
+    - Output: $0.55
+  Local inference: $0.01
+  -------------------------
+  Net savings: $12.33 (99% cheaper at home)
+```
+
+## Configuration
+
+Create `~/.local/share/opencode-savings/config.json` to customize:
 
 ```json
 {
@@ -53,51 +106,46 @@ Create `~/.local/share/opencode-savings/config.json` to customize defaults:
 }
 ```
 
-## How It Works
+### Config Options
 
-The plugin tracks every request by hooking into `message.updated` events:
+| Option | Default | Description |
+|--------|---------|------------|
+| `providers` | `["llama-*", "minimax-*"]` | Provider patterns to track |
+| `inputCostPer1M` | `$0.30` | Input token rate |
+| `outputCostPer1M` | `$1.20` | Output token rate |
+| `cacheReadCostPer1M` | `$0.06` | Cache read rate |
+| `wattage` | `275` | GPU wattage |
+| `promptTokensPerSecond` | `1000` | Input speed |
+| `outputTokensPerSecond` | `43` | Generation speed |
+| `costPerKwh` | `$0.12` | Electricity rate |
 
-1. When an assistant message completes, it reads token counts
-2. Calculates **baseline cost**: What you'd pay at API rates
-3. Calculates **local cost**: Electricity used (watts × time × $/kWh)
-4. Saves to `~/.local/share/opencode-savings/usage.json`
+## Requirements
 
-### Cost Calculation
+- **OpenCode** with `@opencode-ai/plugin` and `@opencode-ai/sdk`
+- **vLLM** with prefix caching enabled:
+  ```
+  --enable-prefix-caching
+  --enable-prompt-tokens-details
+  ```
+- Or **llama.cpp** server (KV cache enabled by default)
 
-```
-baselineCost = (inputTokens × $0.30/M) + (outputTokens × $1.20/M)
+## Troubleshooting
 
-promptSeconds = inputTokens / promptTokensPerSecond
-outputSeconds = outputTokens / outputTokensPerSecond
-localCost = totalWatts × (promptSeconds + outputSeconds) × $0.12/kWh
-```
+**No cache tokens showing?**
+- Make sure vLLM has `--enable-prompt-tokens-details` flag
+- Restart the vLLM server after adding flags
 
-## Example Output
+**Plugin not loading?**
+- Check for syntax errors: `opencode run "hello" 2>&1 | head -20`
+- Verify plugin path exists: `ls ~/.config/opencode/plugins/`
 
-```
-Savings Tracker Summary
-======================
-Period: 7.3 days (since 2024-01-15)
-
-Usage:
-  Total requests: 1,234
-  Total tokens: 5,678,901
-    - Fresh input: 4,123,456
-    - Cache read: 555,445
-    - Completion: 1,555,445
-
-Costs:
-  minimax/nvfp4 API: $234.56
-    - Cache read: $0.03
-    - Fresh input: $123.70
-    - Output: $186.65
-  Local inference: $0.01
-  -------------------------
-  Net savings: $234.55 (99% cheaper at home)
+**Reset tracking data:**
+```bash
+opencode run "/savings-reset confirm: true"
 ```
 
 ## Future Enhancements
 
-See [GitHub Issues](https://github.com/WynnD/opencode-savings-tracker/issues) for planned features:
+See [GitHub Issues](https://github.com/WynnD/opencode-savings-tracker/issues) for:
 - Track savings over time with charts
 - Show cache hit rate percentage
