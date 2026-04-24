@@ -1,38 +1,24 @@
 import type { Plugin } from "@opencode-ai/plugin"
-import { resolve } from "path"
+import { resolve, join } from "path"
 
-interface ModelCost {
+interface GPUConfig {
+  wattage: number
+  promptTokensPerSecond: number
+  outputTokensPerSecond: number
+  costPerKwh?: number
+}
+
+interface BaselineConfig {
+  provider: string
+  model: string
   inputCostPer1M: number
   outputCostPer1M: number
 }
 
-interface GPUConfig {
-  wattage: number
-  tokensPerSecond: number
-  costPerKwh?: number
-  purchasePrice?: number
-  lifespanYears?: number
-}
-
 interface SavingsConfig {
   providers: string[]
-  baseline: {
-    provider: string
-    model: string
-    inputCostPer1M: number
-    outputCostPer1M: number
-  }
-  models: Record<string, ModelCost>
+  baseline: BaselineConfig
   gpus: GPUConfig[]
-}
-
-interface UsageRecord {
-  timestamp: number
-  model: string
-  provider: string
-  promptTokens: number
-  completionTokens: number
-  duration: number
 }
 
 interface SavingsData {
@@ -43,7 +29,6 @@ interface SavingsData {
   totalRequests: number
   baselineCost: number
   localCost: number
-  savings: number
   byModel: Record<string, {
     promptTokens: number
     completionTokens: number
@@ -51,7 +36,7 @@ interface SavingsData {
   }>
 }
 
-const CONFIG_DEFAULTS: SavingsConfig = {
+const DEFAULT_CONFIG: SavingsConfig = {
   providers: ["llama-*"],
   baseline: {
     provider: "openai",
@@ -59,13 +44,12 @@ const CONFIG_DEFAULTS: SavingsConfig = {
     inputCostPer1M: 15,
     outputCostPer1M: 60,
   },
-  models: {},
   gpus: [],
 }
 
 export const SavingsTracker: Plugin = async ({ client, $ }) => {
-  const configDir = process.env.XDG_CONFIG_HOME || `${process.env.HOME}/.config/opencode`
-  const dataFile = resolve(configDir, "savings-tracker", "usage.json")
+  const configDir = process.env.XDG_CONFIG_HOME || join(process.env.HOME!, ".config", "opencode")
+  const dataFile = join(configDir, "savings-tracker", "usage.json")
 
   let usageData: SavingsData = {
     startDate: new Date().toISOString(),
@@ -75,8 +59,34 @@ export const SavingsTracker: Plugin = async ({ client, $ }) => {
     totalRequests: 0,
     baselineCost: 0,
     localCost: 0,
-    savings: 0,
     byModel: {},
+  }
+
+  let config = DEFAULT_CONFIG
+
+  async function loadConfig(): Promise<SavingsConfig> {
+    if (config.gpus.length) return config
+
+    try {
+      const cfg = await client.config.get()
+      const savings = (cfg.data as any)?.savings
+      if (savings) {
+        config = {
+          providers: savings.providers || DEFAULT_CONFIG.providers,
+          baseline: savings.baseline || DEFAULT_CONFIG.baseline,
+          gpus: (savings.gpus || []).map((g: any) => ({
+            wattage: g.wattage || 275,
+            promptTokensPerSecond: g.promptTokensPerSecond || g.tokensPerSecond || 1000,
+            outputTokensPerSecond: g.outputTokensPerSecond || g.tokensPerSecond || 43,
+            costPerKwh: g.costPerKwh || 0.12,
+          })),
+        }
+      }
+    } catch {
+      // Use defaults
+    }
+
+    return config
   }
 
   async function loadData() {
@@ -90,6 +100,8 @@ export const SavingsTracker: Plugin = async ({ client, $ }) => {
 
   async function saveData() {
     usageData.lastUpdated = new Date().toISOString()
+    const dir = join(configDir, "savings-tracker")
+    await $`mkdir -p ${dir}`
     await Bun.write(dataFile, JSON.stringify(usageData, null, 2))
   }
 
@@ -103,22 +115,19 @@ export const SavingsTracker: Plugin = async ({ client, $ }) => {
     })
   }
 
-  function calculateLocalCost(promptTokens: number, completionTokens: number): number {
-    const config = loadConfig()
-    if (!config.gpus.length) return 0
+  function calculateLocalCost(promptTokens: number, completionTokens: number, cfg: SavingsConfig): number {
+    if (!cfg.gpus.length) return 0
 
-    const totalWatts = config.gpus.reduce((sum, gpu) => sum + gpu.wattage, 0)
-    const tokensPerSecond = config.gpus.reduce((sum, gpu) => sum + gpu.tokensPerSecond, 0)
-    const costPerKwh = config.gpus[0]?.costPerKwh || 0.12
+    const totalWatts = cfg.gpus.reduce((sum, gpu) => sum + gpu.wattage, 0)
+    const promptTps = cfg.gpus.reduce((sum, gpu) => sum + gpu.promptTokensPerSecond, 0)
+    const outputTps = cfg.gpus.reduce((sum, gpu) => sum + gpu.outputTokensPerSecond, 0)
+    const costPerKwh = cfg.gpus[0]?.costPerKwh || 0.12
 
-    const totalTokens = promptTokens + completionTokens
-    const seconds = totalTokens / tokensPerSecond
-    const watthours = (totalWatts * seconds) / 3600
+    const promptSeconds = promptTokens / promptTps
+    const outputSeconds = completionTokens / outputTps
+    const totalSeconds = promptSeconds + outputSeconds
+    const watthours = (totalWatts * totalSeconds) / 3600
     return (watthours * costPerKwh) / 1000
-  }
-
-  function loadConfig(): SavingsConfig {
-    return CONFIG_DEFAULTS
   }
 
   return {
@@ -126,15 +135,16 @@ export const SavingsTracker: Plugin = async ({ client, $ }) => {
       savings: {
         description: "Show savings tracker summary",
         args: {},
-        async execute(_args, context) {
+        async execute(_args, _context) {
           await loadData()
+          const cfg = await loadConfig()
           const elapsed = Date.now() - new Date(usageData.startDate).getTime()
           const hours = elapsed / (1000 * 60 * 60)
           const days = hours / 24
 
-          const config = loadConfig()
-          const baselineName = `${config.baseline.provider}/${config.baseline.model}`
+          const baselineName = `${cfg.baseline.provider}/${cfg.baseline.model}`
           const totalTokens = usageData.totalPromptTokens + usageData.totalCompletionTokens
+          const savings = usageData.baselineCost - usageData.localCost
 
           return `Savings Tracker Summary
 ========================
@@ -147,22 +157,22 @@ Usage:
     - Completion: ${usageData.totalCompletionTokens.toLocaleString()}
 
 Costs:
-  Baseline (${baselineName}): $${usageData.baselineCost.toFixed(4)}
+  Baseline (${baselineName} @ $${cfg.baseline.inputCostPer1M}/$ ${cfg.baseline.outputCostPer1M}): $${usageData.baselineCost.toFixed(4)}
   Local inference: $${usageData.localCost.toFixed(6)}
   -------------------
-  Net savings: $${(usageData.baselineCost - usageData.localCost).toFixed(4)}
-  (That's ${((usageData.baselineCost - usageData.localCost) / (hours || 1)).toFixed(4)}/hr)`
+  Net savings: $${savings.toFixed(4)}
+  (That's $${(savings / (hours || 1)).toFixed(4)}/hr)`
         },
       },
 
       "savings-reset": {
-        description: "Reset savings data",
+        description: "Reset savings tracker data",
         args: {
-          confirm: { type: "boolean", description: "Confirm reset", default: false },
+          confirm: { type: "boolean", description: "Set to true to confirm reset", default: false },
         },
         async execute(args, _context) {
           if (!args.confirm) {
-            return "Pass confirm: true to reset"
+            return "Pass confirm: true to reset tracking data"
           }
 
           usageData = {
@@ -173,48 +183,34 @@ Costs:
             totalRequests: 0,
             baselineCost: 0,
             localCost: 0,
-            savings: 0,
             byModel: {},
           }
 
           await saveData()
-          return "Savings data reset"
-        },
-      },
-
-      "savings-set-config": {
-        description: "Update savings tracker config",
-        args: {
-          gpu: { type: "string", description: "GPU wattage or 'wattage:tps' format" },
-          baseline: { type: "string", description: "Baseline model in provider/model:input:output format" },
-          providers: { type: "string", description: "Comma-separated provider patterns" },
-        },
-        async execute(args, _context) {
-          let output = "Config updated. Note: Full config editing requires manual edit of opencode.json"
-          return output
+          return "Savings data reset. Start fresh!"
         },
       },
     },
 
-    async "session.created"({ session }) {
+    async "session.created"() {
       await loadData()
     },
 
     async "message.updated"({ message }) {
       const modelId = message.model?.id || ""
-      const config = loadConfig()
+      const cfg = await loadConfig()
 
-      if (!matchesProvider(modelId, config.providers)) return
+      if (!matchesProvider(modelId, cfg.providers)) return
 
       const promptTokens = message.usage?.prompt_tokens || 0
       const completionTokens = message.usage?.completion_tokens || 0
 
       if (!promptTokens && !completionTokens) return
 
-      const baselineCost = (promptTokens * config.baseline.inputCostPer1M / 1_000_000) +
-                      (completionTokens * config.baseline.outputCostPer1M / 1_000_000)
+      const baselineCost = (promptTokens * cfg.baseline.inputCostPer1M / 1_000_000) +
+                        (completionTokens * cfg.baseline.outputCostPer1M / 1_000_000)
 
-      const localCost = calculateLocalCost(promptTokens, completionTokens)
+      const localCost = calculateLocalCost(promptTokens, completionTokens, cfg)
 
       usageData.totalPromptTokens += promptTokens
       usageData.totalCompletionTokens += completionTokens
