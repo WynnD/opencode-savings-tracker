@@ -1,4 +1,5 @@
 import { type Plugin, tool } from "@opencode-ai/plugin"
+import type { Event } from "@opencode-ai/sdk"
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { join, dirname } from "node:path"
 
@@ -41,13 +42,14 @@ function saveJson(path, data) {
   writeFileSync(path, JSON.stringify(data, null, 2))
 }
 
-function matchesProvider(modelId, patterns) {
+function matchesProvider(providerId, modelId, patterns) {
   return patterns.some(pattern => {
     if (pattern.endsWith("*")) {
       const prefix = pattern.slice(0, -1)
-      return modelId.startsWith(prefix) || modelId.includes(prefix)
+      return providerId.startsWith(prefix) || modelId.startsWith(prefix) ||
+             providerId.includes(prefix) || modelId.includes(prefix)
     }
-    return modelId === pattern
+    return providerId === pattern || modelId === pattern
   })
 }
 
@@ -183,14 +185,21 @@ Costs:
       }),
     },
 
-    "message.updated": async ({ message }) => {
-      const modelId = message.model?.id || ""
+    event: async ({ event }) => {
+      if (event.type !== "message.updated") return
+      const msg = (event as any).properties?.info
+      if (!msg || msg.role !== "assistant") return
+      
+      const assistantMsg = msg as { providerID?: string; modelID?: string; tokens?: { input: number; output: number } }
+      if (!assistantMsg?.tokens) return
+
+      const modelId = `${assistantMsg.providerID || ""}/${assistantMsg.modelID || ""}`
       const cfg = loadConfig()
 
-      if (!matchesProvider(modelId, cfg.providers)) return
+      if (!matchesProvider(assistantMsg.providerID || "", assistantMsg.modelID || "", cfg.providers)) return
 
-      const promptTokens = message.usage?.prompt_tokens || 0
-      const completionTokens = message.usage?.completion_tokens || 0
+      const promptTokens = assistantMsg.tokens.input || 0
+      const completionTokens = assistantMsg.tokens.output || 0
 
       if (!promptTokens && !completionTokens) return
 

@@ -25,13 +25,16 @@ describe("matchesProvider", () => {
   ]
 
   for (const { model, patterns, expected } of tests) {
+    const providerId = model.split("/")[0]
+    const modelId = model.split("/")[1] || model
     test(`"${model}" with [${patterns.join(",")}] -> ${expected}`, () => {
       const matches = patterns.some(pattern => {
         if (pattern.endsWith("*")) {
           const prefix = pattern.slice(0, -1)
-          return model.startsWith(prefix) || model.includes(prefix)
+          return providerId.startsWith(prefix) || modelId.startsWith(prefix) ||
+                 providerId.includes(prefix) || modelId.includes(prefix)
         }
-        return model === pattern
+        return providerId === pattern || modelId === pattern
       })
       expect(matches).toBe(expected)
     })
