@@ -1,4 +1,4 @@
-import { type Plugin, tool } from "@opencode-ai/plugin"
+import { createHash } from "node:crypto"
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { join, dirname } from "node:path"
 
@@ -64,7 +64,7 @@ function calculateLocalCost(promptTokens, completionTokens, cfg) {
   return (watthours * costPerKwh) / 1000
 }
 
-export const SavingsTracker: Plugin = async ({ client }) => {
+export default async () => {
   const configFile = join(DATA_DIR, "config.json")
   const dataFile = join(DATA_DIR, "usage.json")
 
@@ -116,18 +116,12 @@ export const SavingsTracker: Plugin = async ({ client }) => {
     saveJson(dataFile, usageData)
   }
 
-  await client.app.log({
-    service: "savings-tracker",
-    level: "info",
-    message: "Plugin initialized",
-  })
-
   return {
     tool: {
-      savings: tool({
+      savings: {
         description: "Show savings tracker summary",
         args: {},
-        async execute() {
+        execute() {
           loadData()
           const cfg = loadConfig()
           const elapsed = Date.now() - new Date(usageData.startDate).getTime()
@@ -156,14 +150,14 @@ Costs:
   Net savings: $${savings.toFixed(4)} ($${savingsPerMTok.toFixed(2)}/M tok)
   Rate: ${((savings / (usageData.baselineCost || 1)) * 100).toFixed(0)}% cheaper at home`
         },
-      }),
+      },
 
-      "savings-reset": tool({
+      "savings-reset": {
         description: "Reset savings tracker data",
         args: {
-          confirm: tool.schema.boolean().default(false),
+          confirm: { type: "boolean", description: "Set to true to confirm reset", default: false },
         },
-        async execute(args) {
+        execute(args) {
           if (!args.confirm) {
             return "Pass confirm: true to reset tracking data"
           }
@@ -180,10 +174,10 @@ Costs:
           saveData()
           return "Savings data reset. Start fresh!"
         },
-      }),
+      },
     },
 
-    "message.updated": async ({ message }) => {
+    "message.updated"({ message }) {
       const modelId = message.model?.id || ""
       const cfg = loadConfig()
 
